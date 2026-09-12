@@ -92,12 +92,8 @@ jobs:
           EXPOSE 6080
 
           CMD ["/bin/bash", "-c", \
-            "mkdir -p /home/kali/.vnc && \
-             echo '${RDP_PASS}' | vncpasswd -f > /home/kali/.vnc/passwd && \
-             chown -R kali:kali /home/kali/.vnc && \
-             chmod 600 /home/kali/.vnc/passwd && \
-             rm -rf /tmp/.X11-unix/X1 /tmp/.X1-lock; \
-             vncserver :1 -geometry 1280x720 -depth 24 & \
+            "su - kali -c 'mkdir -p /home/kali/.vnc && echo \"${RDP_PASS}\" | vncpasswd -f > /home/kali/.vnc/passwd && chmod 600 /home/kali/.vnc/passwd && rm -rf /tmp/.X11-unix/* /tmp/.X1-lock' && \
+             su - kali -c 'vncserver :1 -geometry 1280x720 -depth 24' && \
              websockify --web=/usr/share/novnc/ 6080 localhost:5901"]
           EOF
 
