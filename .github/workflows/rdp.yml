@@ -31,6 +31,7 @@ jobs:
               apt-get install -y --no-install-recommends \
                 kali-desktop-xfce \
                 tigervnc-standalone-server \
+                tigervnc-common \
                 novnc \
                 websockify \
                 dbus-x11 \
@@ -89,15 +90,23 @@ jobs:
           RUN echo "startxfce4" > /home/kali/.xsession && \
               chown kali:kali /home/kali/.xsession
 
+          # Set VNC password during build phase
+          ARG VNC_PASS
+          RUN echo "${VNC_PASS}" | vncpasswd -f > /home/kali/.vnc/passwd && \
+              chown kali:kali /home/kali/.vnc/passwd && \
+              chmod 600 /home/kali/.vnc/passwd
+
           EXPOSE 6080
 
           CMD ["/bin/bash", "-c", \
-            "su - kali -c 'vncserver -kill :1 2>/dev/null || true; rm -rf /tmp/.X11-unix/X1; vncserver :1 -geometry 1280x720 -depth 24' && \
+            "rm -rf /tmp/.X11-unix/X1 /tmp/.X1-lock; \
+             vncserver :1 -geometry 1280x720 -depth 24 & \
              websockify --web=/usr/share/novnc/ 6080 localhost:5901"]
           EOF
 
           docker build \
             --progress=plain \
+            --build-arg VNC_PASS="${RDP_PASS}" \
             -t kali-vnc-lab .
 
           docker run -d \
@@ -105,9 +114,6 @@ jobs:
             --shm-size=8g \
             -p 127.0.0.1:6080:6080 \
             kali-vnc-lab
-
-          docker exec kali-vnc-lab \
-            bash -lc "echo '${RDP_PASS}' | vncpasswd -f > /home/kali/.vnc/passwd && chown kali:kali /home/kali/.vnc/passwd && chmod 600 /home/kali/.vnc/passwd"
 
       - name: Install Tailscale
         run: |
