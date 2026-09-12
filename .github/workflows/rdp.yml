@@ -1,0 +1,475 @@
+name: Kali Cyber Lab
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kali-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      RDP_PORT: "3390"
+      CONTAINER_NAME: "kali-lab"
+
+    steps:
+
+      # ------------------------------------------------------------
+      # 1. Prepare GitHub Runner
+      # ------------------------------------------------------------
+      - name: Prepare runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "[+] Runner information"
+          uname -a
+          df -h
+
+          echo "[+] Docker version"
+          docker --version
+
+          echo "[+] Cleaning unused Docker data"
+          docker system prune -af || true
+
+
+      # ------------------------------------------------------------
+      # 2. Download official Kali Rolling image
+      # ------------------------------------------------------------
+      - name: Pull official Kali image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          docker pull kalilinux/kali-rolling
+
+
+      # ------------------------------------------------------------
+      # 3. Start Kali container
+      # ------------------------------------------------------------
+      - name: Start Kali container
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+          docker run -d \
+            --name "$CONTAINER_NAME" \
+            --hostname kali-lab \
+            --restart unless-stopped \
+            -p 127.0.0.1:${RDP_PORT}:3390 \
+            kalilinux/kali-rolling \
+            /bin/bash -c 'trap : TERM INT; sleep infinity & wait'
+
+
+      # ------------------------------------------------------------
+      # 4. Update Kali
+      # ------------------------------------------------------------
+      - name: Update Kali
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          docker exec "$CONTAINER_NAME" \
+            bash -lc '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get upgrade -y
+              apt-get autoremove -y
+              apt-get clean
+            '
+
+
+      # ------------------------------------------------------------
+      # 5. Install only GUI + RDP + essential utilities
+      #
+      # Intentionally NOT installed:
+      # hydra
+      # hashcat
+      # ffuf
+      # masscan
+      # feroxbuster
+      # burpsuite
+      # seclists
+      # ------------------------------------------------------------
+      - name: Install Kali XFCE and XRDP
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          docker exec "$CONTAINER_NAME" \
+            bash -lc '
+              export DEBIAN_FRONTEND=noninteractive
+
+              apt-get install -y \
+                kali-desktop-xfce \
+                xorg \
+                xrdp \
+                xorgxrdp \
+                dbus-x11 \
+                sudo \
+                curl \
+                wget \
+                git \
+                ca-certificates \
+                unzip \
+                zip \
+                nano \
+                vim \
+                less \
+                procps \
+                iproute2 \
+                iputils-ping \
+                net-tools \
+                dnsutils \
+                traceroute \
+                openssh-client \
+                python3 \
+                python3-pip \
+                python3-venv
+
+              apt-get clean
+              rm -rf /var/lib/apt/lists/*
+            '
+
+
+      # ------------------------------------------------------------
+      # 6. Configure Kali user
+      # ------------------------------------------------------------
+      - name: Configure Kali user
+        shell: bash
+        env:
+          RDP_PASS: ${{ secrets.RDP_PASS }}
+        run: |
+          set -Eeuo pipefail
+
+          if [ -z "${RDP_PASS:-}" ]; then
+            echo "[!] RDP_PASS secret is empty."
+            exit 1
+          fi
+
+          docker exec \
+            -e RDP_PASS="$RDP_PASS" \
+            "$CONTAINER_NAME" \
+            bash -lc '
+              set -Eeuo pipefail
+
+              if id kali >/dev/null 2>&1; then
+                echo "[+] User kali already exists"
+              else
+                useradd \
+                  --create-home \
+                  --shell /bin/bash \
+                  kali
+              fi
+
+              echo "kali:${RDP_PASS}" | chpasswd
+
+              usermod -aG sudo kali
+
+              mkdir -p /home/kali
+
+              chown -R kali:kali /home/kali
+
+              echo "kali ALL=(ALL) NOPASSWD:ALL" \
+                > /etc/sudoers.d/kali
+
+              chmod 440 /etc/sudoers.d/kali
+            '
+
+
+      # ------------------------------------------------------------
+      # 7. Configure XFCE session
+      # ------------------------------------------------------------
+      - name: Configure XFCE session
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          docker exec "$CONTAINER_NAME" \
+            bash -lc '
+              set -Eeuo pipefail
+
+              cat > /home/kali/.xsession << "EOF"
+              #!/bin/sh
+              export XDG_CURRENT_DESKTOP=XFCE
+              export XDG_SESSION_DESKTOP=xfce
+              export DESKTOP_SESSION=xfce
+              exec startxfce4
+              EOF
+
+              chmod +x /home/kali/.xsession
+
+              chown kali:kali /home/kali/.xsession
+            '
+
+
+      # ------------------------------------------------------------
+      # 8. Configure XRDP
+      # ------------------------------------------------------------
+      - name: Configure XRDP
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          docker exec "$CONTAINER_NAME" \
+            bash -lc '
+              set -Eeuo pipefail
+
+              XRDP_CONFIG="/etc/xrdp/xrdp.ini"
+
+              if [ ! -f "$XRDP_CONFIG" ]; then
+                echo "[!] XRDP configuration file not found."
+                exit 1
+              fi
+
+              sed -i \
+                "s/^port=.*/port=3390/" \
+                "$XRDP_CONFIG"
+
+              cat > /etc/xrdp/startwm.sh << "EOF"
+              #!/bin/sh
+
+              export LANG=C.UTF-8
+              export LC_ALL=C.UTF-8
+
+              if [ -r /etc/profile ]; then
+                . /etc/profile
+              fi
+
+              if [ -r "$HOME/.profile" ]; then
+                . "$HOME/.profile"
+              fi
+
+              exec startxfce4
+              EOF
+
+              chmod +x /etc/xrdp/startwm.sh
+            '
+
+
+      # ------------------------------------------------------------
+      # 9. Fix common XFCE / XRDP permissions
+      # ------------------------------------------------------------
+      - name: Apply XRDP desktop fixes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          docker exec "$CONTAINER_NAME" \
+            bash -lc '
+              set -Eeuo pipefail
+
+              mkdir -p /etc/polkit-1/localauthority/50-local.d
+
+              cat > /etc/polkit-1/localauthority/50-local.d/45-allow-colord.pkla << "EOF"
+              [Allow Colord all Users]
+              Identity=unix-user:*
+              Action=org.freedesktop.color-manager.create-device;org.freedesktop.color-manager.create-profile;org.freedesktop.color-manager.delete-device;org.freedesktop.color-manager.delete-profile;org.freedesktop.color-manager.modify-device;org.freedesktop.color-manager.modify-profile
+              ResultAny=no
+              ResultInactive=no
+              ResultActive=yes
+              EOF
+
+              chown -R kali:kali /home/kali
+            '
+
+
+      # ------------------------------------------------------------
+      # 10. Start XRDP
+      # ------------------------------------------------------------
+      - name: Start XRDP
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          docker exec "$CONTAINER_NAME" \
+            bash -lc '
+              set -Eeuo pipefail
+
+              /etc/init.d/xrdp stop 2>/dev/null || true
+              /etc/init.d/xrdp start
+
+              sleep 3
+
+              echo "[+] XRDP processes:"
+              pgrep -a xrdp || true
+
+              echo "[+] Listening ports:"
+              ss -lntp | grep ":3390" || true
+            '
+
+
+      # ------------------------------------------------------------
+      # 11. Install Tailscale on GitHub runner
+      # ------------------------------------------------------------
+      - name: Install Tailscale
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+          tailscale version
+
+
+      # ------------------------------------------------------------
+      # 12. Connect runner to Tailscale
+      # ------------------------------------------------------------
+      - name: Connect to Tailscale
+        shell: bash
+        env:
+          TS_AUTH_KEY: ${{ secrets.TS_AUTH_KEY }}
+        run: |
+          set -Eeuo pipefail
+
+          if [ -z "${TS_AUTH_KEY:-}" ]; then
+            echo "[!] TS_AUTH_KEY secret is empty."
+            exit 1
+          fi
+
+          sudo tailscale up \
+            --auth-key="${TS_AUTH_KEY}" \
+            --hostname="kali-cyber-lab"
+
+
+      # ------------------------------------------------------------
+      # 13. Expose local XRDP privately through Tailscale
+      # ------------------------------------------------------------
+      - name: Configure private RDP access
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sudo tailscale serve \
+            --tcp=3390 \
+            tcp://127.0.0.1:3390
+
+          echo "[+] Tailscale status"
+          sudo tailscale status
+
+          echo "[+] Tailscale IP"
+          sudo tailscale ip -4
+
+          echo "[+] Tailscale Serve status"
+          sudo tailscale serve status
+
+
+      # ------------------------------------------------------------
+      # 14. Verify Kali
+      # ------------------------------------------------------------
+      - name: Verify Kali environment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo "KALI INFORMATION"
+          echo "=========================================="
+
+          docker exec "$CONTAINER_NAME" \
+            bash -lc '
+              cat /etc/os-release
+              echo
+              echo "Kernel:"
+              uname -a
+              echo
+              echo "XFCE:"
+              xfce4-session --version || true
+              echo
+              echo "XRDP:"
+              xrdp --version || true
+              echo
+              echo "Python:"
+              python3 --version
+              echo
+              echo "Disk:"
+              df -h /
+            '
+
+          echo
+          echo "=========================================="
+          echo "RDP PORT CHECK"
+          echo "=========================================="
+
+          sudo ss -lntp | grep ":3390" || true
+
+          echo
+          echo "=========================================="
+          echo "Tailscale"
+          echo "=========================================="
+
+          sudo tailscale status
+
+
+      # ------------------------------------------------------------
+      # 15. Confirm intentionally excluded tools
+      # ------------------------------------------------------------
+      - name: Confirm excluded tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          docker exec "$CONTAINER_NAME" \
+            bash -lc '
+              echo "[+] The following tools are intentionally NOT installed:"
+
+              for tool in \
+                hydra \
+                hashcat \
+                ffuf \
+                masscan \
+                feroxbuster \
+                burpsuite
+              do
+                if command -v "$tool" >/dev/null 2>&1; then
+                  echo "[WARNING] $tool is installed"
+                else
+                  echo "[OK] $tool is not installed"
+                fi
+              done
+
+              if [ -d /usr/share/seclists ]; then
+                echo "[WARNING] SecLists directory exists"
+              else
+                echo "[OK] SecLists is not installed"
+              fi
+            '
+
+
+      # ------------------------------------------------------------
+      # 16. Keep lab alive
+      # ------------------------------------------------------------
+      - name: Keep lab alive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "=========================================="
+          echo "KALI LAB IS READY"
+          echo "=========================================="
+
+          echo "[+] Container:"
+          docker ps --filter "name=${CONTAINER_NAME}"
+
+          echo
+          echo "[+] Tailscale:"
+          sudo tailscale status
+
+          echo
+          echo "[+] RDP:"
+          echo "Private Tailscale TCP port: 3390"
+
+          echo
+          echo "[+] Lab will remain available until"
+          echo "the GitHub Actions job reaches its time limit."
+
+          while true; do
+            sleep 60
+
+            if ! docker ps --format "{{.Names}}" | grep -qx "$CONTAINER_NAME"; then
+              echo "[!] Kali container stopped."
+              exit 1
+            fi
+          done
