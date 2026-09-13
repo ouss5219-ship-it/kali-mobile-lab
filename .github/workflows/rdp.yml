@@ -9,15 +9,27 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Maximize System Memory (Add 8GB Swap)
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
       - name: Connect to Tailscale
         uses: tailscale/github-action@v2
         with:
           authkey: ${{ secrets.TALESCALE_AUTH_KEY }}
 
-      - name: Install XFCE Desktop & VNC
+      - name: Install Official Kali Desktop & Themes
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt update
-          sudo apt install xfce4 xfce4-goodies tightvncserver git -y
+          sudo apt install -y wget gnupg
+          wget -qO- https://archive.kali.org/archive-key.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/kali.gpg > /dev/null
+          echo "deb http://http.kali.org/kali kali-rolling main non-free contrib" | sudo tee /etc/apt/sources.list.d/kali.list
+          sudo apt update
+          sudo -E apt install -y -o Dpkg::Options::="--force-confold" kali-themes kali-desktop-xfce tightvncserver git kali-linux-headless
           mkdir -p ~/.vnc
           echo "12345678" | vncpasswd -f > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
