@@ -14,20 +14,23 @@ jobs:
         with:
           authkey: ${{ secrets.TALESCALE_AUTH_KEY }}
 
-      - name: Install Official Kali Desktop & Themes
+      - name: Install Updated XFCE & Kali Themes
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt update
-          sudo apt install -y wget gnupg
+          sudo apt install -y wget gnupg xfce4 xfce4-goodies tightvncserver git
+
           wget -qO- https://archive.kali.org/archive-key.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/kali.gpg > /dev/null
           echo "deb http://http.kali.org/kali kali-rolling main non-free contrib" | sudo tee /etc/apt/sources.list.d/kali.list
           sudo apt update
-          sudo -E apt install -y -o Dpkg::Options::="--force-confold" kali-themes kali-desktop-xfce tightvncserver git kali-linux-headless
+
+          sudo apt install -y --no-install-recommends kali-themes kali-wallpapers desktop-base
+
           mkdir -p ~/.vnc
           echo "12345678" | vncpasswd -f > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
           echo "#!/bin/bash" > ~/.vnc/xstartup
-          echo "xrdb \$HOME/.Xresources" >> ~/.vnc/xstartup
+          echo "xrdb \$HOME/.Xresources 2>/dev/null" >> ~/.vnc/xstartup
           echo "startxfce4 &" >> ~/.vnc/xstartup
           chmod +x ~/.vnc/xstartup
           vncserver :1 -geometry 1280x720 -depth 24
