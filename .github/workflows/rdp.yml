@@ -1,4 +1,4 @@
-name: linux
+name: kalii
 
 on: [workflow_dispatch]
 
@@ -12,7 +12,7 @@ jobs:
       - name: Connect to Tailscale
         uses: tailscale/github-action@v2
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          authkey: ${{ secrets.TALESCALE_AUTH_KEY }}
 
       - name: Install XFCE Desktop & VNC
         run: |
@@ -21,9 +21,9 @@ jobs:
           vncserver :1
           vncserver -kill :1
           mkdir -p ~/.vnc
-          echo "#!/bin/bash
-          xrdb $HOME/.Xresources
-          startxfce4 &" > ~/.vnc/xstartup
+          echo "#!/bin/bash" > ~/.vnc/xstartup
+          echo "xrdb \$HOME/.Xresources" >> ~/.vnc/xstartup
+          echo "startxfce4 &" >> ~/.vnc/xstartup
           chmod +x ~/.vnc/xstartup
           vncserver :1 -geometry 1280x720 -depth 24
 
